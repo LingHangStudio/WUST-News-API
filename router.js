@@ -1,472 +1,194 @@
-const express = require('express');
-const date = require('./spider');
-const db = require('./sql')
+const express = require('express')
+const database = require('./database')
+const targetList = require('./store/targetList')
+const xueyuanList = require('./store/xueyuanList')
+const tableRouter = require('./store/tableRouter')
+
+
+
+// 创建数据库连接实例
+const db = database.database()
+database.testDatabase(db)
+
 // 创建路由对象
 const router = express.Router()
 
-let query_things = function (sql, values) {
-  // 返回一个 Promise
-  return new Promise((resolve, reject) => {
-    db.getConnection(function (err, connection) {
-      if (err) {
-        reject(err);
-      } else {
-        connection.query(sql, values, (err, rows) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(rows);
-          }
-          // 结束会话
-          connection.release();
-        });
-      }
-    });
-  });
-};
 
+router.post('/post/news-list', async function(req, res) {
+	// 大类编号
+	var part = req.body.part
+	// 小类编号
+	var sub = req.body.sub
+	// 每页的新闻条数
+	var num = req.body.num
+	// 页数
+	var page = req.body.page
+	// 偏移
+	var offset = page * num
 
-// 挂载具体路由
-router.post('/post/news-list', async(req, res) => {
-  let {part,sub,num,page} = req.body
-  let _page = page * num
-  let newsList = await query_things(`SELECT id,title,time,href FROM my_data WHERE part = ${part} AND sub = ${sub} LIMIT ${_page} , ${num}`)
+	var dict = {
+		1: "xuexiao",
+		2: "jiaowu",
+		4: "tuanwei"
+	}
+	var partName = dict[part]
+	if (partName == null || targetList[partName][sub-1] == null) {
+		// part, sub 不在范围内，无对应数据
+		res.send({})
+		return null
+	}
+	var subName = targetList[partName][sub-1].name
+	var tb = `${partName}_${subName}`
+	var rtnList = await database.queryPromise(
+		db,
+		`SELECT id, title, data, time, other FROM ${tb} ORDER BY id DESC LIMIT ${num} OFFSET ${offset}`
+	)
+	var newsList = []
+	for (var idx = 0; idx < rtnList.length; idx += 1) {
+		var news = rtnList[idx]
+		var newsOther = JSON.parse(news.other)
+		newsList.push({
+			id: `1-${part}-${sub}-${news.id}`,
+			title: news.title,
+			date: JSON.parse(news.time),
+			picList: newsOther.picList
+		})
+	}
 
-  for(let i =0 ; i<newsList.length;i++){
-    var item = newsList[i];
-    let _href = item.href;
-    let _id = item.id;
-    item.piclist = await query_things(
-      `SELECT picture_url FROM picture WHERE href = '${_href}'`
-    );
-  }
-
-  // console.log(newsList);
-  
-  res.send({
-    part,
-    sub,
-    num,
-    page,
-    "databaseUpdateTime": date,
-    newsList,
-  })
+	var resData = {
+		part: part,
+		sub: sub,
+		num: num,
+		page: page,
+		newsList: newsList
+	}
+	res.send(resData)
 })
 
-router.post('/post/news-content', async(req, res) => {
-  let id = req.body.id
-  let news_content = await query_things(`SELECT data,title,time,href FROM my_data WHERE id = ${id} `)
-  for(let i =0 ; i<news_content.length;i++){
-    var item = news_content[i];
-    let _href = item.href;
-    let _id = item.id;
-    item.piclist = await query_things(
-      `SELECT picture_url FROM picture WHERE href = '${_href}'`
-    );
-    item.fileList = await query_things(
-      `SELECT appendix,appendix_title FROM appendix WHERE href = '${_href}'`
-    );
-  }
 
-  
-  res.send({
-    id,
-    news_content,
-  })
+router.post('/post/news-content', async function(req, res) {
+	var id = req.body.id
+	var typePartSubId = id.split('-')
+
+	var tb = tableRouter.tableName(typePartSubId[0], typePartSubId[1], typePartSubId[2])
+	if (tb == null) {
+		res.send({})
+		return null
+	}
+	var newsArr = await database.queryPromise(
+		db,
+		`SELECT title, time, data, href, other FROM ${tb} WHERE id = ${typePartSubId[3]} LIMIT 1`
+	)
+	var newsObj = newsArr[0]
+	if (newsObj == null) {
+		res.send({})
+		return null
+	}
+	var newsOther = JSON.parse(newsObj.other)
+	res.send({
+		id: id,
+		href: newsObj.href,
+		title: newsObj.title,
+		date: JSON.parse(newsObj.time),
+		content: newsObj.data,
+		picList: newsOther.picList,
+		fileList: newsOther.fileList
+	})
 })
 
-router.post('/post/house-sub', async(req, res) => {
-  let {house} = req.body
-  let info = [] 
 
-  if(house == 1){
-    info = [
-      {
-      "sub1":1,
-      "name":"公告栏"
-      },
-      {
-      "sub1":2,
-      "name":"学院新闻"
-      },
-      {
-      "sub1":3,
-      "name":"学工动态"
-      },
-      {
-      "sub1":4,
-      "name":"学术交流"
-      },
-      {
-      "sub1":5,
-      "name":"实验室安全"
-      },
-    ]
-  }
-  else if(house == 2){
-    info = [
-      {
-      "sub1":1,
-      "name":"学院新闻')"
-      },
-      {
-      "sub1":2,
-      "name":"通知公告"
-      },
-      {
-      "sub1":3,
-      "name":"人才培养"
-      }, 
-    ]
-  }
-  else if(house == 3){
-    info = [
-      {
-      "sub1":1,
-      "name":"学院要闻')"
-      },
-      {
-      "sub1":2,
-      "name":"通知公告"
-      },
-      {
-      "sub1":3,
-      "name":"学术动态"
-      },
-      {
-        "sub1":4,
-        "name":"学子家园"
-      },
-    ]
-  }
-  else if(house == 4){
-    info = [
-      {
-      "sub1":1,
-      "name":"新闻动态')"
-      },
-      {
-      "sub1":2,
-      "name":"公告栏"
-      },
-      {
-      "sub1":3,
-      "name":"教学信息"
-      }, 
-    ]
-  }
-  else if(house == 5){
-    info = [
-      {
-      "sub1":1,
-      "name":"学院要闻')"
-      },
-      {
-      "sub1":2,
-      "name":"通知公告"
-      },
-      {
-      "sub1":3,
-      "name":"教学动态"
-      }, 
-    ]
-  }
-  else if(house == 6){
-    info = [
-      {
-      "sub1":1,
-      "name":"学院新闻')"
-      },
-      {
-      "sub1":2,
-      "name":"学术交流"
-      },
-      {
-      "sub1":3,
-      "name":"通知公告"
-      },
-      {
-      "sub1":4,
-      "name":"教育教学"
-      },
-      {
-      "sub1":5,
-      "name":"师生动态"
-      },
-    ]
-  }
-  else if(house == 7){
-    info = [
-      {
-      "sub1":1,
-      "name":"学院新闻')"
-      },
-      {
-      "sub1":2,
-      "name":"通知公告"
-      },
-      {
-      "sub1":3,
-      "name":"党建工作"
-      }, 
-    ]
-  }
-  else if(house == 8){
-    info = [
-      {
-      "sub1":1,
-      "name":"学院新闻')"
-      },
-      {
-      "sub1":2,
-      "name":"教学动态"
-      },
-      {
-      "sub1":3,
-      "name":"通知公告"
-      },
-      {
-      "sub1":4,
-      "name":"科研动态"
-      },
-    ]
-  }
-  else if(house == 9){
-    info = [
-      {
-      "sub1":1,
-      "name":"通知公告')"
-      },
-      {
-      "sub1":2,
-      "name":"校园短波"
-      },
-      {
-      "sub1":3,
-      "name":"理论广角"
-      },
-      {
-        "sub1":4,
-        "name":"社会聚焦"
-      },
-    ]
-  }
-  else if(house == 10){
-    info = [
-      {
-      "sub1":1,
-      "name":"新闻头条')"
-      },
-      {
-      "sub1":2,
-      "name":"最新公告"
-      },
-    ]
-  }
-  else if(house == 11){
-    info = [
-      {
-      "sub1":1,
-      "name":"学院新闻')"
-      },
-      {
-      "sub1":2,
-      "name":"通知公告"
-      },
-      {
-      "sub1":3,
-      "name":"管理制度"
-      },
-      {
-      "sub1":4,
-      "name":"学术交流"
-      },
-      {
-      "sub1":5,
-      "name":"科研动态"
-      },
-    ]
-  }
-  else if(house == 12){
-    info = [
-      {
-      "sub1":1,
-      "name":"新闻动态')"
-      },
-      {
-      "sub1":2,
-      "name":"党建工作"
-      },
-      {
-      "sub1":3,
-      "name":"通知公告"
-      }, 
-    ]
-  }
-  else if(house == 13){
-    info = [
-      {
-      "sub1":1,
-      "name":"公示公告')"
-      },
-      {
-      "sub1":2,
-      "name":"综合新闻"
-      },
-      {
-      "sub1":3,
-      "name":"党建工作"
-      },
-      {
-      "sub1":4,
-      "name":"学生工作"
-      }, 
-    ]
-  }
-  else if(house == 14){
-    info = [
-      {
-      "sub1":1,
-      "name":"公告栏')"
-      },
-      {
-      "sub1":2,
-      "name":"新闻动态"
-      },
-      {
-      "sub1":3,
-      "name":"师生风采"
-      }, 
-    ]
-  }
-  else if(house == 15){
-    info = [
-      {
-      "sub1":1,
-      "name":"通知公告')"
-      },
-      {
-      "sub1":2,
-      "name":"学院新闻"
-      }, 
-    ]
-  }
-  else if(house == 16){
-    info = [
-      {
-      "sub1":1,
-      "name":"通知公告')"
-      },
-      {
-      "sub1":2,
-      "name":"学院新闻"
-      },
-      {
-      "sub1":3,
-      "name":"科研通知"
-      }, 
-      {
-        "sub1":4,
-        "name":"学团动态"
-      }, 
-    ]
-  }
-  else if(house == 17){
-    info = [
-      {
-      "sub1":1,
-      "name":"通知公告')"
-      },
-      {
-      "sub1":2,
-      "name":"学院新闻"
-      },
-    ]
-  }
-  else if(house == 18){
-    info = [
-      {
-      "sub1":1,
-      "name":"通知公告')"
-      },
-      {
-      "sub1":2,
-      "name":"教学动态"
-      },
-      {
-      "sub1":3,
-      "name":"学工动态"
-      }, 
-      {
-        "sub1":4,
-        "name":"科研动态"
-      },
-    ]
-  }
-  
-  res.send({
-    info,
-    house
-  })
-
+router.post('/post/house-sub', function(req, res) {
+	// 学院编号
+	var house = req.body.house
+	var dict = [
+		'cailiaoyuyejinxueyuan',
+		'chengshijianshexueyuan',
+		'hengdaguanlixueyuan',
+		'guojixueyuan',
+		'huaxueyuhuagongxueyuan',
+		'jixiezidonghuaxueyuan',
+		'jisuanjikexueyujishuxueyuan',
+		'lixueyuan',
+		'makesizhuyixueyuan',
+		'qicheyujiaotonggongchengxueyuan',
+		'shengmingkexueyujiankangxueyuan',
+		'tiyuxueyuan',
+		'waiguoyuxueyuan',
+		'wenfayujingjixueyuan',
+		'xinxikexueyugongchengxueyuan',
+		'yixueyuan',
+		'yishuyushejixueyuan',
+		'ziyuanyuhuanjinggongchengxueyuan'
+	]
+	var subList = []
+	var houseName = dict[house-1]
+	if (houseName == null) {
+		res.send({})
+		return null
+	}
+	var originList = xueyuanList[houseName]
+	for (var idx = 0; idx < originList.length; idx += 1) {
+		subList.push({
+			sub: originList[idx].sub,
+			name: originList[idx].cnName
+		})
+	}
+	
+	res.send({
+		house: house,
+		subList: subList
+	})
 })
 
-router.post('/post/house-news',async(req, res) => {
-  let {house,sub,num,page} = req.body
-  let _page = page * num
-  let house_news = await query_things(`SELECT id,title,time,href FROM my_data WHERE part = ${house} AND sub = ${sub} LIMIT ${_page} , ${num}`)
 
-  for(let i =0 ; i<house_news.length;i++){
-    var item = house_news[i];
-    let _href = item.href;
-    let _id = item.id;
-    item.piclist = await query_things(
-      `SELECT picture_url FROM picture WHERE href = '${_href}'`
-    );
-    item.fileList = await query_things(
-      `SELECT appendix,appendix_title FROM appendix WHERE href = '${_href}'`
-    );
-  }
+router.post('/post/house-news', async function(req, res) {
+	// 学院编号
+	var house = req.body.house
+	// 小类编号
+	var sub = req.body.sub
+	// 每页的新闻条数
+	var num = req.body.num
+	// 页数
+	var page = req.body.page
+	// 偏移
+	var offset = page * num
 
-  
-  res.send({
-    house,
-    sub,
-    num,
-    page,
-    "databaseUpdateTime": date,
-    house_news,
-  })
-})
+	var tb = tableRouter.tableName(2, house, sub)
+	if (tb == null) {
+		res.send({})
+		return null
+	}
+	var rtnList = await database.queryPromise(
+		db,
+		`SELECT id, title, data, time, other FROM ${tb} ORDER BY id DESC LIMIT ${num} OFFSET ${offset}`
+	)
+	var newsList = []
+	for (var idx = 0; idx < rtnList.length; idx += 1) {
+		var news = rtnList[idx]
+		var newsOther = JSON.parse(news.other)
+		newsList.push({
+			id: `2-${house}-${sub}-${news.id}`,
+			title: news.title,
+			date: JSON.parse(news.time),
+			picList: newsOther.picList
+		})
+	}
 
-router.post('/post/search-news', async(req, res) => {
-  let keyword = req.body.keyword
-  let search_news = await query_things(`SELECT id,title,time,href FROM my_data WHERE title LIKE "%${keyword}%" `)
-
-  for(let i =0 ; i<search_news.length;i++){
-    var item = search_news[i];
-    let _href = item.href;
-    let _id = item.id;
-    item.piclist = await query_things(
-      `SELECT picture_url FROM picture WHERE href = '${_href}'`
-    );
-    item.fileList = await query_things(
-      `SELECT appendix,appendix_title FROM appendix WHERE href = '${_href}'`
-    );
-  }
-
-  
-  res.send({
-    keyword,
-    search_news,
-  })
+	var resData = {
+		house: house,
+		sub: sub,
+		num: num,
+		page: page,
+		newsList: newsList
+	}
+	res.send(resData)
 })
 
 
 router.get('/status',(req,res)=>{
-    res.send({
-      "status": "running"
-    })
+		res.send({
+			"status": "running"
+		})
 })
 
 // 向外导出路由对象
